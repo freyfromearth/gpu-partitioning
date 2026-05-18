@@ -1,0 +1,17 @@
+# build outputs
+bench_partition
+bench_partition_asan
+*.o
+*.out
+
+# generated bmark data
+results/*
+!results/.gitkeep
+
+# figs
+figures/*
+!figures/.gitkeep
+
+# editor / os noise
+.vscode/
+.DS_Store
