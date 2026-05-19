@@ -21,7 +21,7 @@ summary = (df.groupby(["mode", "n", "bits", "partitions", "distribution"], as_in
     mean_time_ms=("time_ms", "mean"),
     std_time_ms=("time_ms", "std"),
     mean_throughput_mtuples_s=("throughput_mtuples_s", "mean"),
-    std_throughput_mtuples_s=("throughput_mtuples_s", "std"),
+    std_throughput_mtuples_s=("throughput_mtuples_s", "std")
 ))
 
 summary.to_csv("results/summary.csv", index=False)
@@ -42,7 +42,7 @@ for mode in sorted(plot_df["mode"].unique()):
         yerr=sub["std_time_ms"],
         marker="o",
         capsize=3,
-        label=mode.upper(),
+        label=mode.upper()
     )
     
 plt.xscale("log")
@@ -101,13 +101,13 @@ save_plot(FIGURE_DIR / "runtime_vs_partitions.png")
 cpu = plot_df[plot_df["mode"] == "cpu"][["bits", "partitions", "mean_time_ms"]]
 gpu = plot_df[plot_df["mode"] == "gpu"][["bits", "partitions", "mean_time_ms"]]
 
-speedup_partitions = cpu.merge(gpu, on=["bits", "partitions"], suffixes=("_cpu", "_gpu"),)
+speedup_partitions = cpu.merge(gpu, on=["bits", "partitions"], suffixes=("_cpu", "_gpu"))
 
 if not speedup_partitions.empty:
-    speedup_partitions["speedup"] = (speedup_partitions["mean_time_ms_cpu"] / speedup_partitions["mean_time_ms_gpu"],)
+    speedup_partitions["speedup"] = (speedup_partitions["mean_time_ms_cpu"] / speedup_partitions["mean_time_ms_gpu"])
     
     plt.figure()
-    plt.plot(speedup_partitions["partitions"], speedup_partitions["speedup"], marker="o",)
+    plt.plot(speedup_partitions["partitions"], speedup_partitions["speedup"], marker="o")
     plt.axhline(1.0, linestyle="--")
     plt.xscale("log", base=2)
     plt.xlabel("Number of partitions")
@@ -116,7 +116,7 @@ if not speedup_partitions.empty:
     save_plot(FIGURE_DIR / "speedup_vs_partitions.png")
     
 # plot input size speedup at bits=8
-cpu = plot_df = summary[
+cpu = summary[
     (summary["bits"] == bits_to_plot) & (summary["distribution"] == dist) & (summary["mode"] == "cpu")][["n", "mean_time_ms"]]
 
 gpu = summary[

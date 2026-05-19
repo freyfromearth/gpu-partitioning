@@ -33,6 +33,19 @@ static inline void check_cuda(
         check_cuda((call), #call, __FILE__, __LINE__); \
     } while (0)
 
+struct gpu_timing_t {
+    double alloc_ms = 0.0;
+    double h2d_input_ms = 0.0;
+    double count_kernel_ms = 0.0;
+    double d2h_counts_ms = 0.0;
+    double cpu_prefix_ms = 0.0;
+    double h2d_offsets_ms = 0.0;
+    double scatter_kernel_ms = 0.0;
+    double d2h_output_ms = 0.0;
+    double free_ms = 0.0;
+};
+
+
 static inline uint32_t get_partition(uint64_t key, int bits){
     return key & ((1u << bits) - 1u);
 }
@@ -145,7 +158,8 @@ double partition_gpu(
     std::vector<tuple_t> &output,
     std::vector<uint32_t> &counts,
     std::vector<uint32_t> &offsets,
-    int bits
+    int bits,
+    gpu_timing_t &timing
 ) {
     size_t n = input.size();
     uint32_t partitions = 1u << bits;
@@ -159,7 +173,8 @@ double partition_gpu(
     size_t tuple_bytes = n * sizeof(tuple_t);
     size_t partition_bytes = partitions * sizeof(uint32_t);
 
-    double t0 = now_ms();
+    double t_total = now_ms();
+    double t_phase = now_ms();
 
     CHECK_CUDA(cudaMalloc((void **)&d_input, tuple_bytes));
     CHECK_CUDA(cudaMalloc((void **)&d_output, tuple_bytes));
@@ -167,7 +182,14 @@ double partition_gpu(
     CHECK_CUDA(cudaMalloc((void **)&d_offsets, partition_bytes));
     CHECK_CUDA(cudaMalloc((void **)&d_write_pos, partition_bytes));
 
+    timing.alloc_ms = now_ms() - t_phase;
+    t_phase = now_ms();
+
     CHECK_CUDA(cudaMemcpy(d_input, input.data(), tuple_bytes, cudaMemcpyHostToDevice));
+
+    timing.h2d_input_ms = now_ms() - t_phase;
+    t_phase = now_ms();
+
     CHECK_CUDA(cudaMemset(d_counts, 0, partition_bytes));
 
     int threads_per_block = 256;
@@ -178,7 +200,14 @@ double partition_gpu(
 
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
+
+    timing.count_kernel_ms = now_ms() - t_phase;
+    t_phase = now_ms();
+
     CHECK_CUDA(cudaMemcpy(counts.data(), d_counts, partition_bytes, cudaMemcpyDeviceToHost));
+
+    timing.d2h_counts_ms = now_ms() - t_phase;
+    t_phase = now_ms();
 
     offsets[0] = 0;
     for(uint32_t p = 1; p < partitions; p++){ offsets[p] = offsets[p - 1] + counts[p - 1]; }
@@ -190,8 +219,14 @@ double partition_gpu(
                         << ", expected n=" << n << "\n";
                     std::exit(1); }
 
-    // cope offsets to GPU
+    timing.cpu_prefix_ms = now_ms() - t_phase;
+    t_phase = now_ms();
+
+    // copy offsets to GPU
     CHECK_CUDA(cudaMemcpy(d_offsets, offsets.data(), partition_bytes, cudaMemcpyHostToDevice));
+
+    timing.h2d_offsets_ms = now_ms() - t_phase;
+    t_phase = now_ms();
 
     // clear per-partition write positions
     CHECK_CUDA(cudaMemset(d_write_pos, 0, partition_bytes));
@@ -202,10 +237,14 @@ double partition_gpu(
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
 
+    timing.scatter_kernel_ms = now_ms() - t_phase;
+    t_phase = now_ms();
+
     // copy partitioned output back to cpu mem
     CHECK_CUDA(cudaMemcpy(output.data(), d_output, tuple_bytes, cudaMemcpyDeviceToHost));
 
-    double t1 = now_ms();
+    timing.d2h_output_ms = now_ms() - t_phase;
+    t_phase = now_ms();
 
     // free GPU mem
     CHECK_CUDA(cudaFree(d_input));
@@ -214,7 +253,9 @@ double partition_gpu(
     CHECK_CUDA(cudaFree(d_offsets));
     CHECK_CUDA(cudaFree(d_write_pos));
 
-    return t1 - t0;
+    timing.free_ms = now_ms() - t_phase;
+
+    return now_ms() - t_total;
 }
 
 bool validate_partitioning(
@@ -275,6 +316,7 @@ int main(int argc, char **argv){
 
     for(int r = 0; r < repeats; r++){
         double time_ms = 0.0;
+        gpu_timing_t gpu_timing;
 
         if(mode == "cpu"){
             double t0 = now_ms();
@@ -283,7 +325,7 @@ int main(int argc, char **argv){
             time_ms = t1 - t0;
 
         } else if (mode == "gpu"){
-            time_ms = partition_gpu(input, output, counts, offsets, bits);
+            time_ms = partition_gpu(input, output, counts, offsets, bits, gpu_timing);
 
         } else {
             std::cerr << "Unknown mode: " << mode << "\n";
@@ -304,7 +346,16 @@ int main(int argc, char **argv){
             << distribution << ","
             << r << ","
             << time_ms << ","
-            << throughput_mtuples_s
+            << throughput_mtuples_s << ","
+            << gpu_timing.alloc_ms << ","
+            << gpu_timing.h2d_input_ms << ","
+            << gpu_timing.count_kernel_ms << ","
+            << gpu_timing.d2h_counts_ms << ","
+            << gpu_timing.cpu_prefix_ms << ","
+            << gpu_timing.h2d_offsets_ms << ","
+            << gpu_timing.scatter_kernel_ms << ","
+            << gpu_timing.d2h_output_ms << ","
+            << gpu_timing.free_ms
             << "\n";
     }
 

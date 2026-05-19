@@ -5,7 +5,7 @@ mkdir -p results
 
 OUT="results/results.csv"
 
-echo "mode,n,bits,partitions,distribution,repeat,time_ms,throughput_mtuples_s" > "$OUT"
+echo "mode,n,bits,partitions,distribution,repeat,time_ms,throughput_mtuples_s,alloc_ms,h2d_input_ms,count_kernel_ms,d2h_counts_ms,cpu_prefix_ms,h2d_offsets_ms,scatter_kernel_ms,d2h_output_ms,free_ms" > "$OUT"
 
 # we use 6 repeats because repeat 0 is treated as a gpu warmup in the plotting script
 REPEATS=6
