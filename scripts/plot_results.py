@@ -27,6 +27,30 @@ summary = (df.groupby(["mode", "n", "bits", "partitions", "distribution"], as_in
 summary.to_csv("results/summary.csv", index=False)
 print(summary)
 
+timing_columns = [
+    "alloc_ms",
+    "h2d_input_ms",
+    "count_kernel_ms",
+    "d2h_counts_ms",
+    "cpu_prefix_ms",
+    "scatter_kernel_ms",
+    "d2h_output_ms",
+    "free_ms"
+]
+
+timing_summary = (df.groupby(["mode", "n", "bits", "partitions", "distribution"], as_index=False).agg({
+    "alloc_ms": "mean",
+    "h2d_input_ms": "mean",
+    "count_kernel_ms": "mean",
+    "d2h_counts_ms": "mean",
+    "cpu_prefix_ms": "mean",
+    "scatter_kernel_ms": "mean",
+    "d2h_output_ms": "mean",
+    "free_ms": "mean"
+}))
+
+timing_summary.to_csv("results/timing_summary.csv", index=False)
+
 # plot runtime vs input size, fixed bits=8
 bits_to_plot = 8
 dist = "uniform"
@@ -135,3 +159,91 @@ if not speedup_input.empty:
     plt.ylabel("Speedup, CPU time / GPU time")
     plt.title(f"GPU speedup vs input size ({2 ** bits_to_plot} partitions)")
     save_plot(FIGURE_DIR / "speedup_vs_input_size.png")
+    
+# plot stacked GPU timing breakdown for one representative case
+n_case = 10_000_000
+bits_case = 8
+dist_case = "uniform"
+
+case_df = timing_summary[(timing_summary["mode"] == "gpu")
+                         & (timing_summary["n"] == n_case)
+                         & (timing_summary["bits"] == bits_case)
+                         & (timing_summary["distribution"] == dist_case)
+]
+
+if not case_df.empty:
+    row = case_df.iloc[0]
+
+    phase_labels = [
+        "alloc",
+        "h2d input",
+        "count kernel",
+        "d2h counts",
+        "cpu prefix",
+        "h2d offsets",
+        "scatter kernel",
+        "d2h output",
+        "free"
+    ]
+    
+    phase_vals = [
+        row["alloc_ms"],
+        row["h2d_input_ms"],
+        row["count_kernel_ms"],
+        row["d2h_counts_ms"],
+        row["cpu_prefix_ms"],
+        row["scatter_kernel_ms"],
+        row["d2h_output_ms"],
+        row["free_ms"]
+    ]
+    
+    plt.figure()
+    bottom = 0.0
+    
+    for label, val in zip(phase_labels, phase_vals):
+        plt.bar(["GPU pipeline"], [val], bottom=bottom, label=label)
+        bottom += val
+    
+    plt.ylabel("Time, ms")
+    plt.title(f"GPU timing breakdown (n={n_case:,}, {2 ** bits_case} partitions)")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    plt.savefig(FIGURE_DIR / "gpu_timing_breakdown_case.png", dpi=200)
+    plt.close()
+    
+    print(f"Saved {FIGURE_DIR / 'gpu_timing_breakdown_case.png'}")
+    
+# plot GPU phase scaling vs input size for bits = 8
+bits_case = 8
+dist_case = "uniform"
+
+scaling_df = timing_summary[(timing_summary["mode"] == "gpu")
+                         & (timing_summary["bits"] == bits_case)
+                         & (timing_summary["distribution"] == dist_case)
+].sort_values("n")
+
+if not scaling_df.empty:
+    plt.figure()
+    
+    phases_to_plot = [
+        "h2d_input_ms",
+        "count_kernel_ms",
+        "scatter_kernel_ms",
+        "d2h_output_ms"
+    ]
+    
+    for phase in phases_to_plot:
+        plt.plot(scaling_df["n"],scaling_df[phase],marker="o",label=phase)
+    
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.xlabel("input size, tuples")
+    plt.ylabel("Time, ms")
+    plt.title(f"GPU phase scaling vs input size ({2 ** bits_case} partitions)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIGURE_DIR / "gpu_phase_scaling_vs_input_size.png", dpi=200)
+    plt.close()
+    
+    print(f"Saved {FIGURE_DIR / 'gpu_phase_scaling_vs_input_size.png'}")
+    print(f"NOW IS THE TIME TO CLAP!")
