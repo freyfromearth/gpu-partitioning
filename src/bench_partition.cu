@@ -1,3 +1,4 @@
+#include <cuda_runtime.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -11,6 +12,26 @@ struct tuple_t {
     uint64_t key;
     uint64_t payload;
 };
+
+static inline void check_cuda(
+    cudaError_t res,
+    const char *call,
+    const char *file,
+    int line
+){
+    if (res != cudaSuccess){
+        std::cerr
+            << "CUDA error at " << file << ":" << line << "\n"
+            << "Call: " << call << "\n"
+            << "Error: " << cudaGetErrorString(res) << "\n";
+        std::exit(1);
+    }
+}
+
+#define CHECK_CUDA(call) \
+    do { \
+        check_cuda((call), #call, __FILE__, __LINE__); \
+    } while (0)
 
 static inline uint32_t get_partition(uint64_t key, int bits){
     return key & ((1u << bits) - 1u);
@@ -152,9 +173,18 @@ int main(int argc, char **argv){
             partition_cpu(input, output, counts, offsets, bits);
             double t1 = now_ms();
             time_ms = t1 - t0;
+
         } else if (mode == "gpu"){
-            std::cerr << "GPU mode not yet implemented\n";
-            return 1;
+            tuple_t *d_input = nullptr;
+            size_t tuple_bytes = n * sizeof(tuple_t);
+
+            CHECK_CUDA(cudaMalloc((void **)&d_input, tuple_bytes));
+            CHECK_CUDA(cudaMemcpy(d_input, input.data(), tuple_bytes, cudaMemcpyHostToDevice));
+            CHECK_CUDA(cudaFree(d_input));
+
+            std::cerr << "GPU allocation/copy test passed\n";
+            return 0;
+
         } else {
             std::cerr << "Unknown mode: " << mode << "\n";
             return 1;
