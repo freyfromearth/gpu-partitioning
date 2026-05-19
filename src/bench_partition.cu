@@ -109,6 +109,114 @@ void partition_cpu(
     }
 }
 
+__global__ void count_kernel(const tuple_t *input, size_t n, int bits, uint32_t *counts){
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(idx < n){
+        uint32_t mask = (1u << bits) - 1u;
+        uint32_t p = input[idx].key & mask;
+
+        atomicAdd(&counts[p], 1);
+    }
+}
+
+__global__ void scatter_kernel(
+    const tuple_t *input, 
+    tuple_t *output, 
+    size_t n, 
+    int bits, 
+    const uint32_t *offsets,
+    uint32_t *write_pos
+){
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(idx < n){
+        uint32_t mask = (1u << bits) - 1u;
+        uint32_t p = input[idx].key & mask;
+        uint32_t local_pos = atomicAdd(&write_pos[p], 1);
+        uint32_t out_pos = offsets[p] + local_pos;
+
+        output[out_pos] = input[idx]; 
+    }
+}
+
+double partition_gpu(
+    const std::vector<tuple_t> &input,
+    std::vector<tuple_t> &output,
+    std::vector<uint32_t> &counts,
+    std::vector<uint32_t> &offsets,
+    int bits
+) {
+    size_t n = input.size();
+    uint32_t partitions = 1u << bits;
+
+    tuple_t *d_input = nullptr;
+    tuple_t *d_output = nullptr;
+    uint32_t *d_counts = nullptr;
+    uint32_t *d_offsets = nullptr;
+    uint32_t *d_write_pos = nullptr;
+
+    size_t tuple_bytes = n * sizeof(tuple_t);
+    size_t partition_bytes = partitions * sizeof(uint32_t);
+
+    double t0 = now_ms();
+
+    CHECK_CUDA(cudaMalloc((void **)&d_input, tuple_bytes));
+    CHECK_CUDA(cudaMalloc((void **)&d_output, tuple_bytes));
+    CHECK_CUDA(cudaMalloc((void **)&d_counts, partition_bytes));
+    CHECK_CUDA(cudaMalloc((void **)&d_offsets, partition_bytes));
+    CHECK_CUDA(cudaMalloc((void **)&d_write_pos, partition_bytes));
+
+    CHECK_CUDA(cudaMemcpy(d_input, input.data(), tuple_bytes, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemset(d_counts, 0, partition_bytes));
+
+    int threads_per_block = 256;
+    int blocks = static_cast<int>((n + threads_per_block - 1) / threads_per_block);
+
+    // pass 1: count partition sizes on GPU
+    count_kernel<<<blocks, threads_per_block>>>(d_input, n, bits, d_counts);
+
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+    CHECK_CUDA(cudaMemcpy(counts.data(), d_counts, partition_bytes, cudaMemcpyDeviceToHost));
+
+    offsets[0] = 0;
+    for(uint32_t p = 1; p < partitions; p++){ offsets[p] = offsets[p - 1] + counts[p - 1]; }
+
+    // sanity check
+    uint32_t total = offsets[partitions - 1] + counts[partitions - 1];
+    if(total != n){ std::cerr
+                        << "GPU prefix sum error: total=" << total
+                        << ", expected n=" << n << "\n";
+                    std::exit(1); }
+
+    // cope offsets to GPU
+    CHECK_CUDA(cudaMemcpy(d_offsets, offsets.data(), partition_bytes, cudaMemcpyHostToDevice));
+
+    // clear per-partition write positions
+    CHECK_CUDA(cudaMemset(d_write_pos, 0, partition_bytes));
+
+    // pass 2: scatter tuples into partitioned output
+    scatter_kernel<<<blocks, threads_per_block>>>(d_input, d_output, n, bits, d_offsets, d_write_pos);
+
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    // copy partitioned output back to cpu mem
+    CHECK_CUDA(cudaMemcpy(output.data(), d_output, tuple_bytes, cudaMemcpyDeviceToHost));
+
+    double t1 = now_ms();
+
+    // free GPU mem
+    CHECK_CUDA(cudaFree(d_input));
+    CHECK_CUDA(cudaFree(d_output));
+    CHECK_CUDA(cudaFree(d_counts));
+    CHECK_CUDA(cudaFree(d_offsets));
+    CHECK_CUDA(cudaFree(d_write_pos));
+
+    return t1 - t0;
+}
+
 bool validate_partitioning(
     const std::vector<tuple_t> &output,
     const std::vector<uint32_t> &counts,
@@ -175,15 +283,7 @@ int main(int argc, char **argv){
             time_ms = t1 - t0;
 
         } else if (mode == "gpu"){
-            tuple_t *d_input = nullptr;
-            size_t tuple_bytes = n * sizeof(tuple_t);
-
-            CHECK_CUDA(cudaMalloc((void **)&d_input, tuple_bytes));
-            CHECK_CUDA(cudaMemcpy(d_input, input.data(), tuple_bytes, cudaMemcpyHostToDevice));
-            CHECK_CUDA(cudaFree(d_input));
-
-            std::cerr << "GPU allocation/copy test passed\n";
-            return 0;
+            time_ms = partition_gpu(input, output, counts, offsets, bits);
 
         } else {
             std::cerr << "Unknown mode: " << mode << "\n";
