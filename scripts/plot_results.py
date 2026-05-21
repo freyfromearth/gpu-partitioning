@@ -33,17 +33,19 @@ timing_columns = [
     "count_kernel_ms",
     "d2h_counts_ms",
     "cpu_prefix_ms",
+    "h2d_offsets_ms",
     "scatter_kernel_ms",
     "d2h_output_ms",
     "free_ms"
 ]
 
-timing_summary = (df.groupby(["mode", "n", "bits", "partitions", "distribution"], as_index=False).agg({
+timing_summary = (df[df["mode"] == "gpu"].groupby(["mode", "n", "bits", "partitions", "distribution"], as_index=False).agg({
     "alloc_ms": "mean",
     "h2d_input_ms": "mean",
     "count_kernel_ms": "mean",
     "d2h_counts_ms": "mean",
     "cpu_prefix_ms": "mean",
+    "h2d_offsets_ms": "mean",
     "scatter_kernel_ms": "mean",
     "d2h_output_ms": "mean",
     "free_ms": "mean"
@@ -175,15 +177,15 @@ if not case_df.empty:
     row = case_df.iloc[0]
 
     phase_labels = [
-        "alloc",
-        "h2d input",
-        "count kernel",
-        "d2h counts",
-        "cpu prefix",
-        "h2d offsets",
-        "scatter kernel",
-        "d2h output",
-        "free"
+        "GPU mem allocation",
+        "Copy input to GPU",
+        "GPU count phase",
+        "Copy counts to CPU",
+        "CPU compute offsets",
+        "Copy offsets to GPU",
+        "GPU scatter phase",
+        "Copy output to CPU",
+        "GPU mem cleanup"
     ]
     
     phase_vals = [
@@ -192,6 +194,7 @@ if not case_df.empty:
         row["count_kernel_ms"],
         row["d2h_counts_ms"],
         row["cpu_prefix_ms"],
+        row["h2d_offsets_ms"],
         row["scatter_kernel_ms"],
         row["d2h_output_ms"],
         row["free_ms"]
@@ -225,6 +228,13 @@ scaling_df = timing_summary[(timing_summary["mode"] == "gpu")
 if not scaling_df.empty:
     plt.figure()
     
+    phase_display_labels = {
+        "h2d_input_ms": "Copy input to GPU",
+        "count_kernel_ms": "GPU count phase",
+        "scatter_kernel_ms": "GPU scatter phase",
+        "d2h_output_ms": "Copy output to CPU"
+    }
+    
     phases_to_plot = [
         "h2d_input_ms",
         "count_kernel_ms",
@@ -233,11 +243,11 @@ if not scaling_df.empty:
     ]
     
     for phase in phases_to_plot:
-        plt.plot(scaling_df["n"],scaling_df[phase],marker="o",label=phase)
+        plt.plot(scaling_df["n"],scaling_df[phase],marker="o",label=phase_display_labels[phase])
     
     plt.xscale("log")
     plt.yscale("log")
-    plt.xlabel("input size, tuples")
+    plt.xlabel("Input size, tuples")
     plt.ylabel("Time, ms")
     plt.title(f"GPU phase scaling vs input size ({2 ** bits_case} partitions)")
     plt.legend()
@@ -246,4 +256,3 @@ if not scaling_df.empty:
     plt.close()
     
     print(f"Saved {FIGURE_DIR / 'gpu_phase_scaling_vs_input_size.png'}")
-    print(f"NOW IS THE TIME TO CLAP!")
